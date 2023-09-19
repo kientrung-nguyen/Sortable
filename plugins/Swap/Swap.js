@@ -3,8 +3,8 @@ import {
 	index
 } from '../../src/utils.js';
 
-let lastSwapEl;
-
+let lastSwapEl = null;
+let lastSwapIndex = null;
 
 function SwapPlugin() {
 	function Swap() {
@@ -14,37 +14,45 @@ function SwapPlugin() {
 	}
 
 	Swap.prototype = {
-		dragStart({ dragEl }) {
-			lastSwapEl = dragEl;
-		},
-		dragOverValid({ completed, target, onMove, activeSortable, changed, cancel }) {
-			if (!activeSortable.options.swap) return;
+		dragOver({ activeSortable, target, dragEl, onMove, completed, cancel }) {
 			let el = this.sortable.el,
 				options = this.options;
-			if (target && target !== el) {
-				let prevSwapEl = lastSwapEl;
-				if (onMove(target) !== false) {
-					toggleClass(target, options.swapClass, true);
-					lastSwapEl = target;
-				} else {
+			if (!activeSortable.options.swap || !target || target === el || target.contains(dragEl) || onMove(target) === false) {
+				lastSwapEl && toggleClass(lastSwapEl, options.swapClass, false);
 					lastSwapEl = null;
+				lastSwapIndex = null;
+				completed(false);
+				cancel();
 				}
-
-				if (prevSwapEl && prevSwapEl !== lastSwapEl) {
-					toggleClass(prevSwapEl, options.swapClass, false);
-				}
+		},
+		dragOverValid({ completed, target, changed, cancel }) {
+			let options = this.options;
+			if (lastSwapEl && lastSwapEl !== target) {
+				toggleClass(lastSwapEl, options.swapClass, false);
 			}
+			toggleClass(target, options.swapClass, true);
+			lastSwapEl = target;
+			lastSwapIndex = index(target);
 			changed();
 
 			completed(true);
 			cancel();
 		},
-		drop({ activeSortable, putSortable, dragEl }) {
-			let toSortable = (putSortable || this.sortable);
-			let options = this.options;
+		drop({ activeSortable, putSortable, dragEl, originalEvent }) {
+			if (!lastSwapEl) return;
+			if (!originalEvent) return;
+			let toSortable = putSortable || this.sortable,
+				options = this.options;
+				let touch = originalEvent.changedTouches && originalEvent.changedTouches.length ? originalEvent.changedTouches[0] : originalEvent;
+				let target = document.elementFromPoint(touch.clientX, touch.clientY);
+				toggleClass(lastSwapEl, options.swapClass, false);
+				if (options.swap || putSortable && putSortable.options.swap) {
+					if (toSortable && !toSortable.el.contains(target)) {
 			lastSwapEl && toggleClass(lastSwapEl, options.swapClass, false);
-			if (lastSwapEl && (options.swap || putSortable && putSortable.options.swap)) {
-				if (dragEl !== lastSwapEl) {
+						lastSwapEl = null;
+						lastSwapIndex = null;
+						return;
+					}
 					toSortable.captureAnimationState();
 					if (toSortable !== activeSortable) activeSortable.captureAnimationState();
 					swapNodes(dragEl, lastSwapEl);
@@ -52,10 +60,10 @@ function SwapPlugin() {
 					toSortable.animateAll();
 					if (toSortable !== activeSortable) activeSortable.animateAll();
 				}
-			}
 		},
 		nulling() {
 			lastSwapEl = null;
+			lastSwapIndex = null;
 		}
 	};
 
@@ -63,7 +71,8 @@ function SwapPlugin() {
 		pluginName: 'swap',
 		eventProperties() {
 			return {
-				swapItem: lastSwapEl
+				swapItem: lastSwapEl,
+				swapIndex: lastSwapIndex
 			};
 		}
 	});
