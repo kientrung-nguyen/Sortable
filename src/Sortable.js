@@ -392,10 +392,13 @@ function Sortable(el, options) {
 		forceFallback: false,
 		fallbackClass: 'sortable-fallback',
 		fallbackOnBody: false,
+		fallbackOnContainer: () => false,
+		fallbackGhost: (dragEl) => dragEl.cloneNode(true),
 		fallbackTolerance: 0,
 		fallbackOffset: {x: 0, y: 0},
 		fallbackAxis: {x: true, y: true},
-		supportPointer: Sortable.supportPointer !== false && ('PointerEvent' in window) && !Safari,
+		// Disabled on Safari: #1571; Enabled on Safari IOS: #2244
+		supportPointer: Sortable.supportPointer !== false && ('PointerEvent' in window) && (!Safari || IOS),
 		emptyInsertThreshold: 5
 	};
 
@@ -520,7 +523,7 @@ Sortable.prototype = /** @lends Sortable.prototype */ {
 					fromEl: el
 				});
 				pluginEvent('filter', _this, { evt });
-				preventOnFilter && evt.cancelable && evt.preventDefault();
+				preventOnFilter && evt.preventDefault();
 				return; // cancel dnd
 			}
 		}
@@ -543,7 +546,7 @@ Sortable.prototype = /** @lends Sortable.prototype */ {
 			});
 
 			if (filter) {
-				preventOnFilter && evt.cancelable && evt.preventDefault();
+				preventOnFilter && evt.preventDefault();
 				return; // cancel dnd
 			}
 		}
@@ -625,9 +628,15 @@ Sortable.prototype = /** @lends Sortable.prototype */ {
 			on(ownerDocument, 'mousemove', nearestEmptyInsertDetectEvent);
 			on(ownerDocument, 'touchmove', nearestEmptyInsertDetectEvent);
 
-			on(ownerDocument, 'mouseup', _this._onDrop);
-			on(ownerDocument, 'touchend', _this._onDrop);
-			on(ownerDocument, 'touchcancel', _this._onDrop);
+			if (options.supportPointer) {
+				on(ownerDocument, 'pointerup', _this._onDrop);
+				// Native D&D triggers pointercancel
+				!this.nativeDraggable && on(ownerDocument, 'pointercancel', _this._onDrop);
+			} else {
+				on(ownerDocument, 'mouseup', _this._onDrop);
+				on(ownerDocument, 'touchend', _this._onDrop);
+				on(ownerDocument, 'touchcancel', _this._onDrop);
+			}
 
 			// Make dragEl draggable (must be before delay for FireFox)
 			if (FireFox && this.nativeDraggable) {
@@ -646,9 +655,14 @@ Sortable.prototype = /** @lends Sortable.prototype */ {
 				// If the user moves the pointer or let go the click or touch
 				// before the delay has been reached:
 				// disable the delayed drag
-				on(ownerDocument, 'mouseup', _this._disableDelayedDrag);
-				on(ownerDocument, 'touchend', _this._disableDelayedDrag);
-				on(ownerDocument, 'touchcancel', _this._disableDelayedDrag);
+				if (options.supportPointer) {
+					on(ownerDocument, 'pointerup', _this._disableDelayedDrag);
+					on(ownerDocument, 'pointercancel', _this._disableDelayedDrag);
+				} else {
+					on(ownerDocument, 'mouseup', _this._disableDelayedDrag);
+					on(ownerDocument, 'touchend', _this._disableDelayedDrag);
+					on(ownerDocument, 'touchcancel', _this._disableDelayedDrag);
+				}
 				on(ownerDocument, 'mousemove', _this._delayedDragTouchMoveHandler);
 				on(ownerDocument, 'touchmove', _this._delayedDragTouchMoveHandler);
 				options.supportPointer && on(ownerDocument, 'pointermove', _this._delayedDragTouchMoveHandler);
@@ -681,6 +695,8 @@ Sortable.prototype = /** @lends Sortable.prototype */ {
 		off(ownerDocument, 'mouseup', this._disableDelayedDrag);
 		off(ownerDocument, 'touchend', this._disableDelayedDrag);
 		off(ownerDocument, 'touchcancel', this._disableDelayedDrag);
+		off(ownerDocument, 'pointerup', this._disableDelayedDrag);
+		off(ownerDocument, 'pointercancel', this._disableDelayedDrag);
 		off(ownerDocument, 'mousemove', this._delayedDragTouchMoveHandler);
 		off(ownerDocument, 'touchmove', this._delayedDragTouchMoveHandler);
 		off(ownerDocument, 'pointermove', this._delayedDragTouchMoveHandler);
@@ -703,9 +719,9 @@ Sortable.prototype = /** @lends Sortable.prototype */ {
 		}
 
 		try {
+			
 			if (document.selection) {
-				// Timeout neccessary for IE9
-				_nextTick(function () {
+				_nextTick(() => {
 					document.selection.empty();
 				});
 			} else {
@@ -747,16 +763,19 @@ Sortable.prototype = /** @lends Sortable.prototype */ {
 
 	_emulateDragOver: function () {
 		if (touchEvt) {
-			this._lastX = touchEvt.clientX;
-			this._lastY = touchEvt.clientY;
+			let rect = getRect(dragEl),
+				fallbackAxis = this.options.fallbackAxis;
+
+			this._lastX = !fallbackAxis.x ? rect.left : touchEvt.clientX;
+			this._lastY = !fallbackAxis.y ? rect.top : touchEvt.clientY;
 
 			_hideGhostForTarget();
 
-			let target = document.elementFromPoint(touchEvt.clientX, touchEvt.clientY);
+			let target = document.elementFromPoint(!fallbackAxis.x ? rect.left : touchEvt.clientX, !fallbackAxis.y ? rect.top : touchEvt.clientY);
 			let parent = target;
 
 			while (target && target.shadowRoot) {
-				target = target.shadowRoot.elementFromPoint(touchEvt.clientX, touchEvt.clientY);
+				target = target.shadowRoot.elementFromPoint(!fallbackAxis.x ? rect.left : touchEvt.clientX, !fallbackAxis.y ? rect.top : touchEvt.clientY);
 				if (target === parent) break;
 				parent = target;
 			}
@@ -769,8 +788,8 @@ Sortable.prototype = /** @lends Sortable.prototype */ {
 						let inserted;
 
 						inserted = parent[expando]._onDragOver({
-							clientX: touchEvt.clientX,
-							clientY: touchEvt.clientY,
+							clientX: !fallbackAxis.x ? rect.left : touchEvt.clientX, 
+							clientY: !fallbackAxis.y ? rect.top : touchEvt.clientY,
 							target: target,
 							rootEl: parent
 						});
@@ -855,7 +874,15 @@ Sortable.prototype = /** @lends Sortable.prototype */ {
 		// Bug if using scale(): https://stackoverflow.com/questions/2637058
 		// Not being adjusted for
 		if (!ghostEl) {
-			let container = this.options.fallbackOnBody ? document.body : rootEl,
+			if (typeof this.options.fallbackGhost === 'function') {
+				let fallbackGhostEl = this.options.fallbackGhost.call(this, dragEl);
+				if (fallbackGhostEl) {
+					ghostEl = fallbackGhostEl;
+				}
+			}
+			let container = this.options.fallbackOnBody 
+				? document.body 
+				: (typeof this.options.fallbackOnContainer === 'function' ? this.options.fallbackOnContainer.call(this, dragEl) || rootEl : rootEl),
 				rect = getRect(dragEl, true, PositionGhostAbsolutely, true, container),
 				options = this.options;
 
@@ -884,7 +911,7 @@ Sortable.prototype = /** @lends Sortable.prototype */ {
 			}
 
 
-			ghostEl = dragEl.cloneNode(true);
+			ghostEl = ghostEl || dragEl.cloneNode(true);
 
 			toggleClass(ghostEl, options.ghostClass, false);
 			toggleClass(ghostEl, options.fallbackClass, true);
@@ -985,6 +1012,8 @@ Sortable.prototype = /** @lends Sortable.prototype */ {
 		on(document, 'selectstart', _this);
 
 		moved = true;
+
+		window.getSelection().removeAllRanges();
 
 		if (Safari) {
 			css(document.body, 'user-select', 'none');
@@ -1128,6 +1157,7 @@ Sortable.prototype = /** @lends Sortable.prototype */ {
 			target.animated && target.animatingX && target.animatingY ||
 			_this._ignoreWhileAnimating === target
 		) {
+			onMove(rootEl, el, dragEl, dragRect, dragEl, dragRect, evt, false);
 			return completed(false);
 		}
 
@@ -1263,6 +1293,7 @@ Sortable.prototype = /** @lends Sortable.prototype */ {
 					direction === 0 ||
 					sibling === target
 				) {
+					onMove(rootEl, el, dragEl, dragRect, target, targetRect, evt, direction === 1);
 					return completed(false);
 				}
 
@@ -1335,6 +1366,7 @@ Sortable.prototype = /** @lends Sortable.prototype */ {
 		off(ownerDocument, 'mouseup', this._onDrop);
 		off(ownerDocument, 'touchend', this._onDrop);
 		off(ownerDocument, 'pointerup', this._onDrop);
+		off(ownerDocument, 'pointercancel', this._onDrop);
 		off(ownerDocument, 'touchcancel', this._onDrop);
 		off(document, 'selectstart', this);
 	},
